@@ -161,7 +161,6 @@ class T:
         if not self.qr_code_init_flag:
             self.qr_code_init_flag = True
 
-    #TODO: 订阅T265后转换: 图像->机体->地图
     def targt_position_update_step(self,timeEvent):
         # trans, rot = [],[]
         if not self.qr_code_init_flag:
