@@ -18,7 +18,7 @@ from mavros_msgs.msg import PositionTarget, State
 from mavros_msgs.srv import CommandTOL, SetMode
 
 '''Parameter'''
-tag_size = 0.285
+tag_size = 0.18
 hal_size = tag_size / 2
 fx = 378.66393
 # fx = 371.05646
@@ -71,10 +71,11 @@ class T:
         # Ctrl Loop
         if self.state_now == states[
             "REACHED"] and self.current_fcu_state.mode == State.MODE_PX4_OFFBOARD and self.fcu_state_valid_flg:
-            self.fcu_state_valid_flg = False
-            res = self.landing_client(base_mode=0, custom_mode="AUTO.LAND")
-            self.state_now = states["LANDING"]
-            print res
+            print "REACHED"
+            #self.fcu_state_valid_flg = False
+            #res = self.landing_client(base_mode=0, custom_mode="AUTO.LAND")
+            #self.state_now = states["LANDING"]
+            #print res
             return
         if not self.pos_map:
             return
@@ -126,8 +127,9 @@ class T:
         vec = vec / np.linalg.norm(vec) * land_distance
 
         pos_target = np.array([x for x in pos_map])
-        pos_target[:2] = pos_target[:2] - vec
-        pos_target[2] = pos_target[2] + 0.3
+        # pos_target[:2] = pos_target[:2] - vec
+        # pos_target[2] = pos_target[2] + 0.3
+        pos_target[2] = pos_target[2]+0.5
         self.pos_target = pos_target
         px, py, pz = pos_target - pos_odom
         pxm, pym, pzm = pos_map - pos_odom
@@ -138,7 +140,7 @@ class T:
         dx = -px
         dy = -py
         thre = lambda x, d: max(min(abs(d), x), -abs(d))
-        dyaw = -math.atan2(pos_map[1]-pos_odom[1], pos_map[0]-pos_odom[0])
+        dyaw = -math.atan2(pos_map[1] - pos_odom[1], pos_map[0] - pos_odom[0])
 
         vx = self.pid_controller(dx, 0.03)
         vy = self.pid_controller(dy, 0.03)
@@ -151,12 +153,14 @@ class T:
         vyaw = self.pid_yaw_controller(dyaw, 0.03)
         vyaw = thre(vyaw, 0.5)
         # print vyaw
-        # print "p_M: ", pos_map
-        # print "p_T: ", pos_target
+        print "p_M: ", pos_map
+        print "p_T: ", pos_target
         # print "p_P: ", px, py, pz, -dyaw
-        # print "p_C: ", vx, vy, vz, "yaw_rate: ",vyaw, "|v|: ",np.linalg.norm([vx,vy,vz])
-        # print "+++++++++++++++++++++++++"
+        print "p_C: ", vx, vy, vz, "yaw_rate: ",vyaw, "|v|: ",np.linalg.norm([vx,vy,vz])
+        print "+++++++++++++++++++++++++"
 
+        if np.linalg.norm(pos_odom-pos_target) < 0.2 and pos_odom[2] < 1.5:
+            self.arrive_cnt += 1
         return vx, vy, vz, vyaw
 
     def img_cb_(self, msg):
@@ -181,17 +185,27 @@ class T:
                 Orie = np.eye(4)
                 Orie[:3, :3] = R_body
                 qrx, qry, qrz, qrw = tf.transformations.quaternion_from_matrix(Orie)  # Target Orientation In Fb
-                print "t_body: ", t_body.T
+                # print "t_body: ", t_body.T
 
                 qx, qy, qz, qw = self.current_odom.pose.pose.orientation.x, self.current_odom.pose.pose.orientation.y, self.current_odom.pose.pose.orientation.z, self.current_odom.pose.pose.orientation.w
                 # qx, qy, qz, qw = 0,0,0.5,.866025
                 tx, ty, tz = self.current_odom.pose.pose.position.x, self.current_odom.pose.pose.position.y, self.current_odom.pose.pose.position.z
                 M_m_b = tf.transformations.quaternion_matrix([qx, qy, qz, qw])
                 # print M_m_b
-
+                dpit = np.pi * 33 / 180
+                R_y_33 = np.array([[math.cos(dpit), 0, -np.sin(dpit)],
+                                   [0, 1, 0],
+                                   [np.sin(dpit), 0, np.cos(dpit)]], dtype=np.float64)
                 # M_m_b = np.eye(4)
+                t_1 = np.matmul(R_y_33.T,t_body)
+                # print "t_1", t_1.T
                 t_m_b = np.array([[tx], [ty], [tz]])
-                t_map = np.matmul(M_m_b[:3, :3], t_body) + t_m_b
+                # t_map = np.matmul(M_m_b[:3, :3], t_body) + t_m_b # Pitch = 0
+                #t_map = np.matmul(R_y_33.T, np.matmul(M_m_b[:3, :3], t_body))
+                t_map = np.matmul(M_m_b[:3, :3], t_1) + t_m_b
+                # print "t_odom",t_m_b.T
+                #print t_map.T
+                #t_map = t_map + t_m_b  # Pitch =  33 deg
                 qr_msg = Odometry()
                 qr_msg.header.stamp = rospy.Time.now()
                 qr_msg.header.frame_id = "t265_odom_frame"
@@ -213,8 +227,8 @@ class T:
                 # print yaw
 
                 # print "Odom: ",tx,ty,tz
-                # print "t_map: ", t_map.T
-                # print "yaw: ",yaw,"Pit: ",pit,"Rol: ",rol
+                #print "t_map: ", t_map.T
+                #print "yaw: ",yaw,"Pit: ",pit,"Rol: ",rol
                 # print "--------------------------------------"
                 # t_map = np.matmul(M_m_b[:3,:3].T,(t_body-np.array([[tx],[ty],[tz]])))
 
@@ -234,9 +248,9 @@ class T:
                 if self.pos_target is not None:
                     '''到达检测'''
                     # print np.linalg.norm([self.pos_target[0] - tx,self.pos_target[1] - ty,self.pos_target[2] - tz]), tz
-                    if np.linalg.norm([self.pos_target[0]-tx,
-                                       self.pos_target[1]-ty,
-                                       self.pos_target[2]-tz]) < 0.2 and tz < 0.5:
+                    if np.linalg.norm([self.pos_target[0] - tx,
+                                       self.pos_target[1] - ty,
+                                       self.pos_target[2] - tz]) < 0.2 and tz < 1.5:
                         self.arrive_cnt += 1
             else:  #
                 self.arrive_cnt = 0
@@ -305,7 +319,7 @@ class T:
         # rospy.Subscriber("/d400/color/image_raw", Image, self.img_cb)
         '''Odometry Message'''
         # rospy.Subscriber("/mavros/local_position/odom",Odometry,self.odom_cb)
-        rospy.Subscriber("/camera/odom/sample", Odometry, self.odom_cb)
+        rospy.Subscriber("/t265/odom/sample", Odometry, self.odom_cb)
         self.img_pub = rospy.Publisher("/dotted_img", Image, queue_size=10)
         rospy.Subscriber("/mavros/state", State, self.state_cb, queue_size=10)
         self.target_pos_pub = rospy.Publisher("/target_pose", Odometry, queue_size=10)
